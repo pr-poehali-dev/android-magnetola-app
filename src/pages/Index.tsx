@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import Icon from '@/components/ui/icon';
 import { obdService } from '@/lib/obdService';
+import { arduinoService, ArduinoData } from '@/lib/arduinoService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
 interface DoorStatus {
@@ -78,6 +79,16 @@ const Index = () => {
   const [tripStartFuel, setTripStartFuel] = useState(0);
   const [tripMaxSpeed, setTripMaxSpeed] = useState(0);
   const [tripDistance, setTripDistance] = useState(0);
+  const [isArduinoConnected, setIsArduinoConnected] = useState(false);
+  const [isArduinoConnecting, setIsArduinoConnecting] = useState(false);
+  const [arduinoData, setArduinoData] = useState<ArduinoData>({
+    temperature: 0,
+    humidity: 0,
+    pressure: 0,
+    voltage: 0,
+    custom1: 0,
+    custom2: 0
+  });
   const [doors, setDoors] = useState<DoorStatus>({
     frontLeft: false,
     frontRight: false,
@@ -235,43 +246,103 @@ const Index = () => {
     return hours > 0 ? `${hours} ч ${mins} мин` : `${mins} мин`;
   };
 
+  const connectToArduino = async () => {
+    setIsArduinoConnecting(true);
+    const success = await arduinoService.connect();
+    
+    if (success) {
+      setIsArduinoConnected(true);
+      arduinoService.onData((data) => {
+        setArduinoData(data);
+      });
+      toast({
+        title: 'Подключено',
+        description: 'Arduino Nano успешно подключен',
+      });
+    } else {
+      toast({
+        title: 'Ошибка подключения',
+        description: 'Не удалось подключиться к Arduino',
+        variant: 'destructive',
+      });
+    }
+    setIsArduinoConnecting(false);
+  };
+
+  const disconnectFromArduino = async () => {
+    await arduinoService.disconnect();
+    setIsArduinoConnected(false);
+    toast({
+      title: 'Отключено',
+      description: 'Arduino Nano отключен',
+    });
+  };
+
   useEffect(() => {
     return () => {
       if (isConnected) {
         obdService.disconnect();
       }
+      if (isArduinoConnected) {
+        arduinoService.disconnect();
+      }
     };
-  }, [isConnected]);
+  }, [isConnected, isArduinoConnected]);
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-6">
       <div className="max-w-7xl mx-auto">
-        <header className="mb-6 flex items-center justify-between">
-          <h1 className="text-3xl font-bold text-foreground flex items-center gap-3">
-            <Icon name="Car" size={32} />
-            Автомобиль
-          </h1>
-          {!isConnected ? (
-            <Button 
-              onClick={connectToOBD} 
-              disabled={isConnecting}
-              size="lg"
-              className="h-14 px-6 text-base"
-            >
-              <Icon name="Bluetooth" size={20} className="mr-2" />
-              {isConnecting ? 'Подключение...' : 'Подключить OBD-II'}
-            </Button>
-          ) : (
-            <Button 
-              onClick={disconnectFromOBD}
-              variant="outline"
-              size="lg"
-              className="h-14 px-6 text-base"
-            >
-              <Icon name="BluetoothConnected" size={20} className="mr-2" />
-              Отключить
-            </Button>
-          )}
+        <header className="mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h1 className="text-3xl font-bold text-foreground flex items-center gap-3">
+              <Icon name="Car" size={32} />
+              Автомобиль
+            </h1>
+          </div>
+          <div className="flex gap-3">
+            {!isConnected ? (
+              <Button 
+                onClick={connectToOBD} 
+                disabled={isConnecting}
+                size="lg"
+                className="h-14 px-6 text-base flex-1"
+              >
+                <Icon name="Bluetooth" size={20} className="mr-2" />
+                {isConnecting ? 'Подключение...' : 'Подключить OBD-II'}
+              </Button>
+            ) : (
+              <Button 
+                onClick={disconnectFromOBD}
+                variant="outline"
+                size="lg"
+                className="h-14 px-6 text-base flex-1"
+              >
+                <Icon name="BluetoothConnected" size={20} className="mr-2" />
+                Отключить OBD
+              </Button>
+            )}
+            {!isArduinoConnected ? (
+              <Button 
+                onClick={connectToArduino} 
+                disabled={isArduinoConnecting}
+                size="lg"
+                className="h-14 px-6 text-base flex-1"
+              >
+                <Icon name="Cpu" size={20} className="mr-2" />
+                {isArduinoConnecting ? 'Подключение...' : 'Подключить Arduino'}
+              </Button>
+            ) : (
+              <Button 
+                onClick={disconnectFromArduino}
+                variant="outline"
+                size="lg"
+                className="h-14 px-6 text-base flex-1"
+              >
+                <Icon name="Cpu" size={20} className="mr-2" />
+                Отключить Arduino
+              </Button>
+            )}
+          </div>
         </header>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
@@ -307,6 +378,58 @@ const Index = () => {
                       <span className="text-muted-foreground">Обороты: </span>
                       <span className="font-bold">{rpm} об/мин</span>
                     </div>
+                  </div>
+                </div>
+              </Card>
+            )}
+            {isArduinoConnected && (
+              <Card className="p-6 bg-card border-border">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
+                  <h2 className="text-xl font-bold">Данные Arduino Nano</h2>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div className="p-4 bg-secondary rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Icon name="Thermometer" size={20} className="text-primary" />
+                      <p className="text-sm text-muted-foreground">Температура</p>
+                    </div>
+                    <p className="text-2xl font-bold">{arduinoData.temperature.toFixed(1)}°C</p>
+                  </div>
+                  <div className="p-4 bg-secondary rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Icon name="Droplets" size={20} className="text-primary" />
+                      <p className="text-sm text-muted-foreground">Влажность</p>
+                    </div>
+                    <p className="text-2xl font-bold">{arduinoData.humidity.toFixed(1)}%</p>
+                  </div>
+                  <div className="p-4 bg-secondary rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Icon name="Gauge" size={20} className="text-primary" />
+                      <p className="text-sm text-muted-foreground">Давление</p>
+                    </div>
+                    <p className="text-2xl font-bold">{arduinoData.pressure.toFixed(0)} кПа</p>
+                  </div>
+                  <div className="p-4 bg-secondary rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Icon name="Zap" size={20} className="text-primary" />
+                      <p className="text-sm text-muted-foreground">Напряжение</p>
+                    </div>
+                    <p className="text-2xl font-bold">{arduinoData.voltage.toFixed(2)} В</p>
+                  </div>
+                  <div className="p-4 bg-secondary rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Icon name="Activity" size={20} className="text-primary" />
+                      <p className="text-sm text-muted-foreground">Датчик 1</p>
+                    </div>
+                    <p className="text-2xl font-bold">{arduinoData.custom1.toFixed(1)}</p>
+                  </div>
+                  <div className="p-4 bg-secondary rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Icon name="Radio" size={20} className="text-primary" />
+                      <p className="text-sm text-muted-foreground">Датчик 2</p>
+                    </div>
+                    <p className="text-2xl font-bold">{arduinoData.custom2.toFixed(1)}</p>
                   </div>
                 </div>
               </Card>
