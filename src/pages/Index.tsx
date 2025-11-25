@@ -7,12 +7,30 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import Icon from '@/components/ui/icon';
 import { obdService } from '@/lib/obdService';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
 interface DoorStatus {
   frontLeft: boolean;
   frontRight: boolean;
   rearLeft: boolean;
   rearRight: boolean;
+}
+
+interface TripRecord {
+  timestamp: number;
+  distance: number;
+  avgSpeed: number;
+  maxSpeed: number;
+  fuelUsed: number;
+  avgConsumption: number;
+  duration: number;
+}
+
+interface DataPoint {
+  time: string;
+  fuel: number;
+  speed: number;
+  temp: number;
 }
 
 const Index = () => {
@@ -25,6 +43,41 @@ const Index = () => {
   const [isConnecting, setIsConnecting] = useState(false);
   const [speed, setSpeed] = useState(0);
   const [rpm, setRpm] = useState(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const [currentTrip, setCurrentTrip] = useState<DataPoint[]>([]);
+  const [tripHistory, setTripHistory] = useState<TripRecord[]>([
+    {
+      timestamp: Date.now() - 86400000 * 2,
+      distance: 45.3,
+      avgSpeed: 62,
+      maxSpeed: 110,
+      fuelUsed: 4.2,
+      avgConsumption: 9.3,
+      duration: 42
+    },
+    {
+      timestamp: Date.now() - 86400000,
+      distance: 128.7,
+      avgSpeed: 85,
+      maxSpeed: 130,
+      fuelUsed: 11.8,
+      avgConsumption: 9.2,
+      duration: 91
+    },
+    {
+      timestamp: Date.now() - 3600000 * 4,
+      distance: 22.5,
+      avgSpeed: 48,
+      maxSpeed: 90,
+      fuelUsed: 2.1,
+      avgConsumption: 9.3,
+      duration: 28
+    }
+  ]);
+  const [tripStartTime, setTripStartTime] = useState(0);
+  const [tripStartFuel, setTripStartFuel] = useState(0);
+  const [tripMaxSpeed, setTripMaxSpeed] = useState(0);
+  const [tripDistance, setTripDistance] = useState(0);
   const [doors, setDoors] = useState<DoorStatus>({
     frontLeft: false,
     frontRight: false,
@@ -80,6 +133,9 @@ const Index = () => {
       if (!obdService.getConnectionStatus()) {
         clearInterval(interval);
         setIsConnected(false);
+        if (isRecording) {
+          stopTrip();
+        }
         return;
       }
 
@@ -90,10 +146,93 @@ const Index = () => {
         setRange(data.range);
         setSpeed(data.speed);
         setRpm(data.rpm);
+
+        if (isRecording) {
+          const now = new Date();
+          const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+          
+          setCurrentTrip(prev => [
+            ...prev,
+            {
+              time: timeStr,
+              fuel: data.fuelLevel,
+              speed: data.speed,
+              temp: data.engineTemp
+            }
+          ].slice(-30));
+
+          if (data.speed > tripMaxSpeed) {
+            setTripMaxSpeed(data.speed);
+          }
+
+          setTripDistance(prev => prev + (data.speed / 1800));
+        }
       } catch (error) {
         console.error('Ошибка чтения данных OBD-II:', error);
       }
     }, 2000);
+  };
+
+  const startTrip = () => {
+    setIsRecording(true);
+    setCurrentTrip([]);
+    setTripStartTime(Date.now());
+    setTripStartFuel(fuelLevel);
+    setTripMaxSpeed(0);
+    setTripDistance(0);
+    toast({
+      title: 'Запись начата',
+      description: 'История поездки записывается',
+    });
+  };
+
+  const stopTrip = () => {
+    if (!isRecording) return;
+
+    const duration = Math.round((Date.now() - tripStartTime) / 60000);
+    const fuelUsed = ((tripStartFuel - fuelLevel) / 100) * 60;
+    const avgSpeed = currentTrip.length > 0 
+      ? Math.round(currentTrip.reduce((sum, d) => sum + d.speed, 0) / currentTrip.length)
+      : 0;
+    const avgConsumption = tripDistance > 0 ? (fuelUsed / tripDistance) * 100 : 0;
+
+    const newTrip: TripRecord = {
+      timestamp: Date.now(),
+      distance: Math.round(tripDistance * 10) / 10,
+      avgSpeed,
+      maxSpeed: tripMaxSpeed,
+      fuelUsed: Math.round(fuelUsed * 10) / 10,
+      avgConsumption: Math.round(avgConsumption * 10) / 10,
+      duration
+    };
+
+    setTripHistory(prev => [newTrip, ...prev].slice(0, 10));
+    setIsRecording(false);
+    setCurrentTrip([]);
+    
+    toast({
+      title: 'Поездка завершена',
+      description: `Пройдено ${newTrip.distance} км, расход ${newTrip.avgConsumption} л/100км`,
+    });
+  };
+
+  const formatDate = (timestamp: number) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const hours = Math.floor(diff / 3600000);
+    
+    if (hours < 24) {
+      return `${hours} ч назад`;
+    }
+    const days = Math.floor(hours / 24);
+    return `${days} дн назад`;
+  };
+
+  const formatDuration = (minutes: number) => {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return hours > 0 ? `${hours} ч ${mins} мин` : `${mins} мин`;
   };
 
   useEffect(() => {
@@ -136,10 +275,14 @@ const Index = () => {
         </header>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-2 h-16 mb-6 bg-card">
+          <TabsList className="grid w-full grid-cols-3 h-16 mb-6 bg-card">
             <TabsTrigger value="dashboard" className="text-base h-full data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Icon name="Gauge" size={20} className="mr-2" />
               Панель
+            </TabsTrigger>
+            <TabsTrigger value="trips" className="text-base h-full data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+              <Icon name="Map" size={20} className="mr-2" />
+              Поездки
             </TabsTrigger>
             <TabsTrigger value="settings" className="text-base h-full data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Icon name="Settings" size={20} className="mr-2" />
@@ -264,6 +407,141 @@ const Index = () => {
                     <p className="text-xl font-bold">{doors.rearRight ? 'Открыта' : 'Закрыта'}</p>
                   </div>
                 </div>
+              </div>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="trips" className="space-y-6 animate-fade-in">
+            <Card className="p-6 bg-card border-border">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <Icon name="Route" size={28} className="text-primary" />
+                  <h2 className="text-2xl font-bold">Текущая поездка</h2>
+                </div>
+                {isConnected && (
+                  !isRecording ? (
+                    <Button onClick={startTrip} size="lg" className="h-14 px-6">
+                      <Icon name="Play" size={20} className="mr-2" />
+                      Начать запись
+                    </Button>
+                  ) : (
+                    <Button onClick={stopTrip} variant="destructive" size="lg" className="h-14 px-6">
+                      <Icon name="Square" size={20} className="mr-2" />
+                      Остановить
+                    </Button>
+                  )
+                )}
+              </div>
+
+              {isRecording && currentTrip.length > 0 ? (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="p-4 bg-secondary rounded-lg">
+                      <p className="text-sm text-muted-foreground">Пройдено</p>
+                      <p className="text-3xl font-bold">{tripDistance.toFixed(1)} км</p>
+                    </div>
+                    <div className="p-4 bg-secondary rounded-lg">
+                      <p className="text-sm text-muted-foreground">Макс. скорость</p>
+                      <p className="text-3xl font-bold">{tripMaxSpeed} км/ч</p>
+                    </div>
+                    <div className="p-4 bg-secondary rounded-lg">
+                      <p className="text-sm text-muted-foreground">Время в пути</p>
+                      <p className="text-3xl font-bold">{formatDuration(Math.round((Date.now() - tripStartTime) / 60000))}</p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h3 className="text-lg font-semibold mb-4">График скорости</h3>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <AreaChart data={currentTrip}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                        <XAxis dataKey="time" stroke="hsl(var(--muted-foreground))" />
+                        <YAxis stroke="hsl(var(--muted-foreground))" />
+                        <Tooltip 
+                          contentStyle={{ 
+                            backgroundColor: 'hsl(var(--card))', 
+                            border: '1px solid hsl(var(--border))',
+                            borderRadius: '8px'
+                          }}
+                        />
+                        <Area type="monotone" dataKey="speed" stroke="hsl(var(--primary))" fill="hsl(var(--primary))" fillOpacity={0.3} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div>
+                    <h3 className="text-lg font-semibold mb-4">График топлива и температуры</h3>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <LineChart data={currentTrip}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                        <XAxis dataKey="time" stroke="hsl(var(--muted-foreground))" />
+                        <YAxis stroke="hsl(var(--muted-foreground))" />
+                        <Tooltip 
+                          contentStyle={{ 
+                            backgroundColor: 'hsl(var(--card))', 
+                            border: '1px solid hsl(var(--border))',
+                            borderRadius: '8px'
+                          }}
+                        />
+                        <Line type="monotone" dataKey="fuel" stroke="hsl(var(--primary))" strokeWidth={2} name="Топливо %" />
+                        <Line type="monotone" dataKey="temp" stroke="hsl(var(--destructive))" strokeWidth={2} name="Температура °C" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <Icon name="MapPin" size={48} className="mx-auto text-muted-foreground mb-4" />
+                  <p className="text-lg text-muted-foreground">
+                    {isConnected ? 'Нажмите "Начать запись" для отслеживания поездки' : 'Подключите OBD-II для записи поездок'}
+                  </p>
+                </div>
+              )}
+            </Card>
+
+            <Card className="p-6 bg-card border-border">
+              <div className="flex items-center gap-3 mb-6">
+                <Icon name="History" size={28} className="text-primary" />
+                <h2 className="text-2xl font-bold">История поездок</h2>
+              </div>
+
+              <div className="space-y-4">
+                {tripHistory.map((trip, index) => (
+                  <div key={index} className="p-5 bg-secondary rounded-lg border border-border hover:border-primary transition-colors">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <Icon name="Calendar" size={20} className="text-primary" />
+                        <span className="text-lg font-semibold">{formatDate(trip.timestamp)}</span>
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        {formatDuration(trip.duration)}
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Расстояние</p>
+                        <p className="text-xl font-bold">{trip.distance} км</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Ср. скорость</p>
+                        <p className="text-xl font-bold">{trip.avgSpeed} км/ч</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Макс. скорость</p>
+                        <p className="text-xl font-bold">{trip.maxSpeed} км/ч</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Топливо</p>
+                        <p className="text-xl font-bold">{trip.fuelUsed} л</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Расход</p>
+                        <p className="text-xl font-bold text-primary">{trip.avgConsumption} л/100км</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </Card>
           </TabsContent>
